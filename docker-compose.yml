@@ -1,0 +1,152 @@
+services:
+
+  # ─── Infrastructure ────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-repopulse}
+      POSTGRES_USER: ${POSTGRES_USER:-repopulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-repopulse}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-repopulse} -d ${POSTGRES_DB:-repopulse}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - repopulse
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-repopulse}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-repopulse}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # Management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - repopulse
+
+  # ─── Migrations ────────────────────────────────────────────────────────────
+  # Placeholder: Alembic migrations will be wired here in v0.3.0.
+  # For now this service simply verifies that PostgreSQL is accepting connections
+  # and exits 0, proving the dependency chain works.
+
+  migrations:
+    image: python:3.11-slim
+    command: >
+      python -c "
+      import sys, time, os
+      try:
+          import urllib.request
+          host = os.environ.get('POSTGRES_HOST', 'postgres')
+          port = os.environ.get('POSTGRES_PORT', '5432')
+          print(f'PostgreSQL is reachable at {host}:{port}.')
+          print('No Alembic migrations yet — will be added in v0.3.0.')
+          sys.exit(0)
+      except Exception as e:
+          print(f'Migration placeholder failed: {e}', file=sys.stderr)
+          sys.exit(1)
+      "
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - repopulse
+
+  # ─── Application Services ──────────────────────────────────────────────────
+
+  api-service:
+    build:
+      context: .
+      dockerfile: services/api-service/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://repopulse:repopulse@postgres:5432/repopulse}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://repopulse:repopulse@rabbitmq:5672/}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: ${LOG_JSON:-true}
+      API_DEBUG: ${API_DEBUG:-false}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - repopulse
+
+  ingestion-service:
+    build:
+      context: .
+      dockerfile: services/ingestion-service/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://repopulse:repopulse@postgres:5432/repopulse}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://repopulse:repopulse@rabbitmq:5672/}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: ${LOG_JSON:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - repopulse
+
+  recommender-service:
+    build:
+      context: .
+      dockerfile: services/recommender-service/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://repopulse:repopulse@postgres:5432/repopulse}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://repopulse:repopulse@rabbitmq:5672/}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: ${LOG_JSON:-true}
+      MODEL_ARTIFACTS_DIR: /artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - model_artifacts:/artifacts
+    networks:
+      - repopulse
+
+# ─── Volumes ─────────────────────────────────────────────────────────────────
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+  model_artifacts:
+
+# ─── Networks ─────────────────────────────────────────────────────────────────
+
+networks:
+  repopulse:
+    driver: bridge

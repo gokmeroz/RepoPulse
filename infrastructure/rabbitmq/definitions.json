@@ -1,0 +1,15 @@
+{
+  "_comment": "RabbitMQ topology for RepoPulse. This file will be loaded by the broker in v0.2.0 when exchanges, queues, and bindings are defined. For v0.1.0, broker configuration is done via RABBITMQ_DEFAULT_USER and RABBITMQ_DEFAULT_PASS environment variables only.",
+  "_planned_exchanges": [
+    "repopulse.commands (topic)",
+    "repopulse.events (topic)",
+    "repopulse.dead-letter (fanout)"
+  ],
+  "_planned_queues": [
+    "ingestion.github-sync",
+    "recommender.model-training",
+    "recommender.recommendation-generation",
+    "api.job-events",
+    "repopulse.dead-letter"
+  ]
+}
